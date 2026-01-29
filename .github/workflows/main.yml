@@ -1,0 +1,38 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    types: [ opened, synchronize ]
+
+jobs:
+  test:
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/serenity-js/playwright:v1.57.0-noble
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.13.0'
+      - name: Setup Node Modules
+        uses: bahmutov/npm-install@v1
+      - name: Run Playwright tests
+        run: npm test
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: serenity-report
+          path: target/site/serenity
+          retention-days: 30
+
+      - name: GitHub Pages
+        if: github.ref == 'refs/heads/main'
+        uses: JamesIves/github-pages-deploy-action@v4.8.0
+        with:
+          branch: gh-pages
+          folder: target/site
+          clean: true
