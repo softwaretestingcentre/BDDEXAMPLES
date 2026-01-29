@@ -1,6 +1,6 @@
 import { DataTable } from '@cucumber/cucumber';
 import { contain, endsWith, Ensure, equals, includes, isPresent, startsWith } from '@serenity-js/assertions';
-import { Check, Duration, List, Task, Wait } from '@serenity-js/core';
+import { Check, Duration, List, MetaQuestionAdapter, QuestionAdapter, Task, Wait } from '@serenity-js/core';
 import { DeleteRequest, GetRequest, LastResponse, Send } from '@serenity-js/rest';
 import { By, Click, Enter, isVisible, PageElement, PageElements, Switch, Text, Value } from '@serenity-js/web';
 
@@ -130,73 +130,31 @@ export const Notifications = {
     verifyEmailNotificationInFeed: (mailType: string, mailData: List<{ field: string; value: string }>) =>
         Task.where(`#actor verifies the ${mailType} notification in the feed`,
             Feed.openFirstEmailNotification(mailType),
-            Notifications.emailCheckers[mailType](mailData),
+            CheckNotification[mailType](mailData),
         ),
 
-    emailCheckers: {
-        'Default Email': (mailData: List<{ field: string; value: string }>) =>
-            Task.where(`#actor verifies the Default Email notification in the feed`,
-                Ensure.eventually(
-                    Text.of(NotificationContent.emailSender()),
-                    includes(process.env.OP_USER)
-                ),
-                Switch.to(NotificationContent.dialog()).and(
-                    mailData.forEach(({ actor, item }) =>
-                        actor.attemptsTo(
-                            Ensure.eventually(
-                                Text.ofAll(NotificationContent.emailText()),
-                                contain(item.value))
-                        )
-                    ),
-                    Ensure.eventually(
-                        Text.of(NotificationContent.emailText()
-                            .last()),
-                        includes(
-                            'Sent by OctaiPipe'
-                        )
-                    ),
-                ),
-            ),
-        'Example: HTML Email': (mailData: List<{ field: string; value: string }>) =>
-            Task.where(`#actor verifies the HTML Email notification in the feed`,
-                Switch.to(NotificationContent.dialog()).and(
-                    mailData.forEach(({ actor, item }) =>
-                        actor.attemptsTo(
-                            Ensure.eventually(
-                                NotificationContent.html(),
-                                includes(item.value)
-                            )
-                        )
-                    )
-                ),
-            ),
-        'Example: Teams Notification': (mailData: List<{ field: string; value: string }>) =>
-            Task.where(`#actor verifies the Teams notification in the feed`,
-                Switch.to(NotificationContent.dialog()).and(
-                    mailData.forEach(({ actor, item }) =>
-                        actor.attemptsTo(
-                            Check.whether(item.value, endsWith(':00Z'))
-                                .andIfSo(
-                                    Ensure.eventually(
-                                        NotificationContent.html(),
-                                        includes(item.value.replace(/T/, ' ').replace(/Z/, ''))
-                                    )
-                                )
-                                .otherwise(
-                                    Ensure.eventually(
-                                        NotificationContent.html(),
-                                        includes(item.value)
-                                    )
-                                )
-                        )
-                    )
-                ),
-            ),
-        'QA HTML Email': (mailData: List<{ field: string; value: string }>) =>
-            Notifications.emailCheckers['Example: HTML Email'](mailData),
-    },
 
 };
+
+const CheckNotification = {
+    'Default Email': (mailData: List<{ field: string; value: string }>) =>
+        Task.where(`#actor verifies the Default Email notification in the feed`,
+            NotificationContent.confirmEmailSenderIs(process.env.OP_USER),
+            NotificationContent.confirmEmailTextMatches(mailData),
+        ),
+    'Example: HTML Email': (mailData: List<{ field: string; value: string }>) =>
+        Task.where(`#actor verifies the HTML Email notification in the feed`,
+            NotificationContent.confirmEmailHtmlMatches(mailData),
+        ),
+    'Example: Teams Notification': (mailData: List<{ field: string; value: string }>) =>
+        Task.where(`#actor verifies the Teams notification in the feed`,
+            NotificationContent.confirmTeamsHtmlMatches(mailData),
+        ),
+    'QA HTML Email': (mailData: List<{ field: string; value: string }>) =>
+        Task.where(`#actor verifies the QA HTML Email notification in the feed`,
+            NotificationContent.confirmEmailHtmlMatches(mailData),
+        ),
+}
 
 const Management = {
     link: () =>
@@ -466,18 +424,68 @@ const Feed = {
 
 const NotificationContent = {
 
+    confirmEmailSenderIs: (expectedSender: string) =>
+        Task.where(`#actor confirms that the email sender is ${expectedSender}`,
+            Confirm(
+                NotificationContent.emailSender())
+                .includes(expectedSender),
+        ),
+
+    confirmEmailTextMatches: (mailData: List<{ field: string; value: string }>) =>
+        Task.where(`#actor confirms that the email matches expected data`,
+            Switch.to(NotificationContent.dialog()).and(
+                ConfirmAllOf(
+                    NotificationContent.AllEmailText())
+                    .includesAllOf(mailData),
+                Ensure.eventually(
+                    NotificationContent.AllEmailText(),
+                    contain('Sent by OctaiPipe')
+                ),
+            ),
+        ),
+
+    confirmEmailHtmlMatches: (mailData: List<{ field: string; value: string }>) =>
+        Task.where(`#actor confirms that the email HTML matches expected data`,
+            Switch.to(NotificationContent.dialog()).and(
+                Confirm(
+                    NotificationContent.html())
+                    .includesAllOf(mailData),
+            ),
+        ),
+
+    confirmTeamsHtmlMatches: (mailData: List<{ field: string; value: string }>) =>
+        Task.where(`#actor confirms that the Teams HTML matches expected data`,
+            Switch.to(NotificationContent.dialog()).and(
+                mailData.forEach(({ actor, item }) =>
+                    actor.attemptsTo(
+                        Check.whether(item.value, endsWith(':00Z'))
+                            .andIfSo(
+                                Confirm(
+                                    NotificationContent.html())
+                                    .includes(item.value.replace(/T/, ' ').replace(/Z/, ''))
+                            )
+                            .otherwise(
+                                Confirm(
+                                    NotificationContent.html())
+                                    .includes(item.value)
+                            )
+                    )
+                )
+            ),
+        ),
+
     dialog: () =>
         PageElement.located(By.deepCss('iframe'))
             .describedAs('notification content dialog'),
 
     emailSender: () =>
-        PageElement.located(By.css('[role="dialog"] p'))
-            .describedAs('email sender in notification content'),
+        Text.of(PageElement.located(By.css('[role="dialog"] p'))
+            .describedAs('email sender in notification content')),
 
-    emailText: () =>
-        PageElements.located(By.deepCss('td > div'))
+    AllEmailText: () =>
+        Text.ofAll(PageElements.located(By.deepCss('td > div'))
             .of(PageElements.located(By.css('table')).first())
-            .describedAs('notification text contents'),
+            .describedAs('notification text contents')),
 
     html: () =>
         PageElement.located(By.deepCss('body'))
@@ -486,3 +494,39 @@ const NotificationContent = {
 
 }
 
+const Confirm = (actualContents: QuestionAdapter<string>) => {
+    return {
+        includes: (expectedContent: string) =>
+            Task.where(`#actor confirms that the notification content includes ${expectedContent}`,
+                Ensure.eventually(
+                    actualContents,
+                    includes(expectedContent)
+                ),
+            ),
+        includesAllOf: (expectedContents: List<{ field: string; value: string }>) =>
+            Task.where(`#actor confirms that the notification content includes all expected contents`,
+                expectedContents.forEach(({ actor, item }) =>
+                    actor.attemptsTo(
+                        Confirm(actualContents)
+                            .includes(item.value)
+                    )
+                ),
+            ),
+    }
+}
+
+const ConfirmAllOf = (actualContents: MetaQuestionAdapter<PageElement<any>, string[]>) => {
+    return {
+        includesAllOf: (expectedContents: List<{ field: string; value: string }>) =>
+            Task.where(`#actor confirms that the notification content includes all expected contents`,
+                expectedContents.forEach(({ actor, item }) =>
+                    actor.attemptsTo(
+                        Ensure.eventually(
+                            actualContents,
+                            contain(item.value)
+                        )
+                    )
+                ),
+            ),
+    }
+}
